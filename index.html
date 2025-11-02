@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Move Challenge – November</title>
+    <!-- React + Babel + Tailwind (CDN) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      html, body, #root { height: 100%; }
+      /* Kleurenpalet afgestemd op de screenshot */
+      :root{
+        --ml-dark: #123b2b;     /* donkergroen header */
+        --ml-pink: #F6C7C2;     /* zachte roze achtergrond */
+        --ml-pink-2:#F9D5D1;    /* lichtere panel achtergrond */
+      }
+      body{ background: var(--ml-pink); }
+      .ml-header{ background: var(--ml-dark); color: #FBD7D3; }
+      .ml-card{ background: #fff; border: 1px solid rgba(18,59,43,.10); }
+      .month-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; }
+      .weekday-row{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; }
+      .pill{ background: var(--ml-dark); color:#fff; }
+      .soft{ background: var(--ml-pink-2); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      // ===== Config =====
+      const GOAL_MINUTES = 1250; // november doel
+      const LS_KEY = "move_challenge_gf_november_v1";
+
+      // ===== Helpers =====
+      const YMD = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      const fromYMD = s => new Date(`${s}T00:00:00`);
+      const yearNow = new Date().getFullYear();
+      const NOV_START = new Date(`${yearNow}-11-01T00:00:00`);
+      const NOV_END   = new Date(`${yearNow}-11-30T00:00:00`);
+
+      function enumerateDays(start, end){
+        const out = [];
+        const d = new Date(start);
+        while(d <= end){ out.push(YMD(d)); d.setDate(d.getDate()+1); }
+        return out;
+      }
+      const ALL_DAYS = enumerateDays(NOV_START, NOV_END);
+      const WEEKDAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+      function getMonthMatrix(year, monthIndex){
+        const first = new Date(year, monthIndex, 1);
+        const last  = new Date(year, monthIndex+1, 0);
+        const days  = last.getDate();
+        const startWeekday = (first.getDay()+6)%7; // maandag 0
+        const cells = [];
+        for(let i=0;i<startWeekday;i++) cells.push(null);
+        for(let d=1; d<=days; d++) cells.push(new Date(year, monthIndex, d));
+        while(cells.length % 7 !== 0) cells.push(null);
+        return cells;
+      }
+
+      const novCells = getMonthMatrix(yearNow, 10);
+
+      // ===== Storage =====
+      const loadLocal = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; } };
+      const saveLocal = (obj) => localStorage.setItem(LS_KEY, JSON.stringify(obj));
+      const hardReset = () => { localStorage.removeItem(LS_KEY); location.reload(); };
+
+      // ===== App =====
+      function App(){
+        const [entries, setEntries] = React.useState(() => loadLocal().entries || {});
+        const [modal, setModal] = React.useState(null); // { ymd, value }
+
+        React.useEffect(() => { saveLocal({ entries }); }, [entries]);
+
+        const total = React.useMemo(() =>
+          Object.values(entries).reduce((a,b)=> a + (parseInt(b||0,10)||0), 0)
+        , [entries]);
+
+        const remaining = Math.max(0, GOAL_MINUTES - total);
+
+        const today = new Date();
+        const todayYMD = YMD(today);
+        const remainingDays = ALL_DAYS.filter(d => fromYMD(d) >= new Date(today.getFullYear(), today.getMonth(), today.getDate())).length || 0;
+        const neededPerDay = remainingDays > 0 ? Math.ceil(remaining / remainingDays) : remaining;
+
+        function setMinutes(ymd, mins){
+          setEntries(cur => ({ ...cur, [ymd]: mins }));
+        }
+
+        function exportCSV(){
+          const header = ["date","minutes","cumulative"];
+          let cum = 0;
+          const rows = ALL_DAYS.map(d => {
+            const m = parseInt(entries[d] || 0, 10) || 0;
+            cum += m;
+            return [d, m, cum];
+          });
+          const csv = [header.join(",")].concat(rows.map(r=>r.join(","))).join("\n");
+          const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `move_challenge_nov_${yearNow}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+
+        function progressPct(){
+          return Math.min(100, Math.round((total / GOAL_MINUTES) * 100));
+        }
+
+        function DayCell({date}){
+          if(!date) return <div className="h-20 soft rounded-xl"></div>;
+          if(date < NOV_START || date > NOV_END) return <div className="h-20 soft rounded-xl"></div>;
+          const ymd = YMD(date);
+          const mins = parseInt(entries[ymd] || 0, 10) || 0;
+          const isToday = ymd === todayYMD;
+
+          return (
+            <button
+              onClick={()=> setModal({ ymd, value: mins })}
+              className={`h-20 rounded-xl border p-2 text-left transition hover:shadow-sm ${isToday ? "ring-2 ring-[var(--ml-dark)]" : ""} bg-white/90`}
+              title="Klik om minuten in te vullen"
+            >
+              <div className="text-xs text-slate-600">{date.toLocaleDateString("en-GB",{ day:"2-digit", month:"short" })}</div>
+              <div className="text-sm font-semibold mt-1">{mins} min</div>
+            </button>
+          );
+        }
+
+        return (
+          <div className="min-h-screen flex flex-col">
+            {/* Header */}
+            <header className="ml-header">
+              <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="text-2xl font-extrabold tracking-tight">MOVE</div>
+                  <div className="uppercase text-xs tracking-widest opacity-80">the movement lab – november challenge</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20" onClick={exportCSV}>Export CSV</button>
+                  <button className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20" onClick={hardReset}>Reset</button>
+                </div>
+              </div>
+            </header>
+
+            {/* Hero / Progress */}
+            <main className="flex-1">
+              <section className="max-w-5xl mx-auto px-4">
+                <div className="mt-6 bg-white/60 backdrop-blur rounded-2xl p-6 border border-white/40">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="text-2xl font-bold text-[var(--ml-dark)]">November Goal: 1250 minutes</div>
+                    <div className="text-right">
+                      <div className="text-4xl font-extrabold text-[var(--ml-dark)]">{total}</div>
+                      <div className="text-sm text-slate-600">minutes so far</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 w-full h-3 bg-white rounded-full">
+                    <div className="h-3 pill rounded-full transition-all" style={{ width: `${progressPct()}%` }}></div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
+                    <Stat label="Remaining" value={remaining} sub="minutes" />
+                    <Stat label="Days left incl. today" value={remainingDays} sub="days" />
+                    <Stat label="Needed per day" value={neededPerDay} sub="min / day" />
+                  </div>
+                </div>
+
+                {/* Calendar */}
+                <div className="mt-6 bg-white/70 rounded-2xl p-6 border border-white/50">
+                  <h2 className="text-xl font-semibold text-[var(--ml-dark)] mb-2">November {yearNow}</h2>
+                  <div className="weekday-row text-xs text-slate-600 mb-2">
+                    {WEEKDAYS.map(w => <div key={w} className="text-center">{w}</div>)}
+                  </div>
+                  <div className="month-grid">
+                    {novCells.map((d, i) => <DayCell key={i} date={d} />)}
+                  </div>
+                </div>
+
+                {/* Footer / Small note */}
+                <p className="mt-6 text-center text-xs text-slate-600">All data is stored locally in your browser only.</p>
+              </section>
+            </main>
+
+            {/* Modal */}
+            {modal && (
+              <MinutesModal
+                ymd={modal.ymd}
+                initialValue={modal.value}
+                onCancel={() => setModal(null)}
+                onSave={(val) => { setEntries(cur => ({ ...cur, [modal.ymd]: val })); setModal(null); }}
+              />
+            )}
+          </div>
+        );
+      }
+
+      function Stat({label, value, sub}){
+        return (
+          <div className="soft rounded-xl p-4">
+            <div className="text-xs uppercase tracking-wider text-slate-600">{label}</div>
+            <div className="text-2xl font-bold text-[var(--ml-dark)]">{value}</div>
+            <div className="text-xs text-slate-600">{sub}</div>
+          </div>
+        );
+      }
+
+      function MinutesModal({ ymd, initialValue, onCancel, onSave }){
+        const [val, setVal] = React.useState(Number.isFinite(initialValue) ? initialValue : 0);
+        const d = fromYMD(ymd);
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-6 border border-white/60">
+              <div className="text-center">
+                <h3 className="text-xl font-semibold text-[var(--ml-dark)]">Log minutes</h3>
+                <p className="text-sm text-slate-600 mt-1">{d.toLocaleDateString("en-GB",{ weekday:"long", day:"2-digit", month:"long" })}</p>
+              </div>
+
+              <div className="mt-6">
+                <input
+                  type="range"
+                  min="0"
+                  max="180"
+                  step="1"
+                  value={val}
+                  onChange={e => setVal(parseInt(e.target.value,10) || 0)}
+                  className="w-full"
+                />
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className="w-24 border rounded-lg px-3 py-2 text-center"
+                    value={String(val)}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D+/g,"").slice(0,4);
+                      setVal(v==="" ? 0 : Math.min(1440, parseInt(v,10)));
+                    }}
+                    onBlur={() => setVal(prev => Math.max(0, Math.min(1440, prev)))}
+                  />
+                  <span className="text-sm text-slate-600">minutes</span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-2">
+                <button className="px-4 py-2 rounded-xl border" onClick={onCancel}>Cancel</button>
+                <button className="px-4 py-2 rounded-xl pill" onClick={() => onSave(val)}>Save</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // Mount
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
