@@ -11,19 +11,18 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       html, body, #root { height: 100%; }
-      /* Kleurenpalet afgestemd op de screenshot */
       :root{
-        --ml-dark: #123b2b;     /* donkergroen header */
-        --ml-pink: #F6C7C2;     /* zachte roze achtergrond */
-        --ml-pink-2:#F9D5D1;    /* lichtere panel achtergrond */
+        --ml-dark:#123b2b;
+        --ml-pink:#F6C7C2;
+        --ml-pink-2:#F9D5D1;
       }
       body{ background: var(--ml-pink); }
-      .ml-header{ background: var(--ml-dark); color: #FBD7D3; }
-      .ml-card{ background: #fff; border: 1px solid rgba(18,59,43,.10); }
+      .ml-header{ background: var(--ml-dark); color:#FBD7D3; }
+      .soft{ background: var(--ml-pink-2); }
+      .pill{ background: var(--ml-dark); color:#fff; }
+      .ml-card{ background:#fff; border:1px solid rgba(18,59,43,.10); }
       .month-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; }
       .weekday-row{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; }
-      .pill{ background: var(--ml-dark); color:#fff; }
-      .soft{ background: var(--ml-pink-2); }
     </style>
   </head>
   <body>
@@ -31,8 +30,9 @@
 
     <script type="text/babel">
       // ===== Config =====
-      const GOAL_MINUTES = 1250; // november doel
-      const LS_KEY = "move_challenge_gf_november_v1";
+      const GOAL_MINUTES = 1250;
+      const LS_KEY = "move_challenge_gf_november_v2";
+      const ACTIVITY_TYPES = ["Yoga","Barre","Pilates","Spinning"];
 
       // ===== Helpers =====
       const YMD = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -54,14 +54,13 @@
         const first = new Date(year, monthIndex, 1);
         const last  = new Date(year, monthIndex+1, 0);
         const days  = last.getDate();
-        const startWeekday = (first.getDay()+6)%7; // maandag 0
+        const startWeekday = (first.getDay()+6)%7; // Monday 0
         const cells = [];
         for(let i=0;i<startWeekday;i++) cells.push(null);
         for(let d=1; d<=days; d++) cells.push(new Date(year, monthIndex, d));
         while(cells.length % 7 !== 0) cells.push(null);
         return cells;
       }
-
       const novCells = getMonthMatrix(yearNow, 10);
 
       // ===== Storage =====
@@ -69,35 +68,54 @@
       const saveLocal = (obj) => localStorage.setItem(LS_KEY, JSON.stringify(obj));
       const hardReset = () => { localStorage.removeItem(LS_KEY); location.reload(); };
 
+      // Backward compatibility: entries may be a number, upgrade to object {minutes, activity}
+      function normalizeEntry(e){
+        if (e == null) return { minutes:0, activity:"Yoga" };
+        if (typeof e === "number") return { minutes:e, activity:"Yoga" };
+        const m = parseInt(e.minutes || 0, 10) || 0;
+        const a = ACTIVITY_TYPES.includes(e.activity) ? e.activity : "Yoga";
+        return { minutes:m, activity:a };
+      }
+
       // ===== App =====
       function App(){
-        const [entries, setEntries] = React.useState(() => loadLocal().entries || {});
-        const [modal, setModal] = React.useState(null); // { ymd, value }
+        const initial = loadLocal().entries || {};
+        const [entries, setEntries] = React.useState(initial);
+        const [modal, setModal] = React.useState(null); // { ymd, minutes, activity }
 
         React.useEffect(() => { saveLocal({ entries }); }, [entries]);
 
-        const total = React.useMemo(() =>
-          Object.values(entries).reduce((a,b)=> a + (parseInt(b||0,10)||0), 0)
-        , [entries]);
+        const totals = React.useMemo(() => {
+          let sum = 0;
+          const byType = { Yoga:0, Barre:0, Pilates:0, Spinning:0, Other:0 };
+          for (const d of ALL_DAYS){
+            const n = normalizeEntry(entries[d]);
+            sum += n.minutes;
+            const key = ACTIVITY_TYPES.includes(n.activity) ? n.activity : "Other";
+            byType[key] += n.minutes;
+          }
+          return { sum, byType };
+        }, [entries]);
 
+        const total = totals.sum;
         const remaining = Math.max(0, GOAL_MINUTES - total);
-
         const today = new Date();
         const todayYMD = YMD(today);
         const remainingDays = ALL_DAYS.filter(d => fromYMD(d) >= new Date(today.getFullYear(), today.getMonth(), today.getDate())).length || 0;
         const neededPerDay = remainingDays > 0 ? Math.ceil(remaining / remainingDays) : remaining;
+        const progressPct = Math.min(100, Math.round((total / GOAL_MINUTES) * 100));
 
-        function setMinutes(ymd, mins){
-          setEntries(cur => ({ ...cur, [ymd]: mins }));
+        function setDay(ymd, minutes, activity){
+          setEntries(cur => ({ ...cur, [ymd]: { minutes, activity } }));
         }
 
         function exportCSV(){
-          const header = ["date","minutes","cumulative"];
+          const header = ["date","minutes","activity","cumulative"];
           let cum = 0;
           const rows = ALL_DAYS.map(d => {
-            const m = parseInt(entries[d] || 0, 10) || 0;
-            cum += m;
-            return [d, m, cum];
+            const n = normalizeEntry(entries[d]);
+            cum += n.minutes;
+            return [d, n.minutes, n.activity, cum];
           });
           const csv = [header.join(",")].concat(rows.map(r=>r.join(","))).join("\n");
           const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
@@ -111,34 +129,47 @@
           URL.revokeObjectURL(url);
         }
 
-        function progressPct(){
-          return Math.min(100, Math.round((total / GOAL_MINUTES) * 100));
-        }
-
         function DayCell({date}){
           if(!date) return <div className="h-20 soft rounded-xl"></div>;
           if(date < NOV_START || date > NOV_END) return <div className="h-20 soft rounded-xl"></div>;
           const ymd = YMD(date);
-          const mins = parseInt(entries[ymd] || 0, 10) || 0;
+          const { minutes, activity } = normalizeEntry(entries[ymd]);
           const isToday = ymd === todayYMD;
-
           return (
             <button
-              onClick={()=> setModal({ ymd, value: mins })}
+              onClick={()=> setModal({ ymd, minutes, activity })}
               className={`h-20 rounded-xl border p-2 text-left transition hover:shadow-sm ${isToday ? "ring-2 ring-[var(--ml-dark)]" : ""} bg-white/90`}
-              title="Klik om minuten in te vullen"
+              title="Click to log"
             >
               <div className="text-xs text-slate-600">{date.toLocaleDateString("en-GB",{ day:"2-digit", month:"short" })}</div>
-              <div className="text-sm font-semibold mt-1">{mins} min</div>
+              <div className="text-sm font-semibold mt-1">{minutes} min</div>
+              <div className="text-[10px] text-slate-500">{activity}</div>
             </button>
           );
         }
 
+        // Bar for activity breakdown
+        function ActivityBar({ label, value, max }){
+          const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+          return (
+            <div className="mb-3">
+              <div className="flex justify-between text-xs text-slate-700 mb-1">
+                <span>{label}</span><span>{value} min</span>
+              </div>
+              <div className="h-2 bg-white rounded-full">
+                <div className="h-2 pill rounded-full" style={{ width: `${pct}%` }}></div>
+              </div>
+            </div>
+          );
+        }
+
+        const maxType = Math.max(...ACTIVITY_TYPES.map(t => totals.byType[t] || 0), 1);
+
         return (
-          <div className="min-h-screen flex flex-col">
+          <div className="min-h-screen">
             {/* Header */}
             <header className="ml-header">
-              <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+              <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="text-2xl font-extrabold tracking-tight">MOVE</div>
                   <div className="uppercase text-xs tracking-widest opacity-80">the movement lab – november challenge</div>
@@ -150,52 +181,65 @@
               </div>
             </header>
 
-            {/* Hero / Progress */}
-            <main className="flex-1">
-              <section className="max-w-5xl mx-auto px-4">
-                <div className="mt-6 bg-white/60 backdrop-blur rounded-2xl p-6 border border-white/40">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="text-2xl font-bold text-[var(--ml-dark)]">November Goal: 1250 minutes</div>
-                    <div className="text-right">
-                      <div className="text-4xl font-extrabold text-[var(--ml-dark)]">{total}</div>
-                      <div className="text-sm text-slate-600">minutes so far</div>
+            <main className="max-w-6xl mx-auto px-4 py-6">
+              <div className="grid lg:grid-cols-3 gap-6">
+                {/* Left two columns */}
+                <div className="lg:col-span-2">
+                  {/* Progress */}
+                  <div className="bg-white/60 backdrop-blur rounded-2xl p-6 border border-white/40">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div className="text-2xl font-bold text-[var(--ml-dark)]">November Goal: 1250 minutes</div>
+                      <div className="text-right">
+                        <div className="text-4xl font-extrabold text-[var(--ml-dark)]">{total}</div>
+                        <div className="text-sm text-slate-600">minutes so far</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 w-full h-3 bg-white rounded-full">
+                      <div className="h-3 pill rounded-full transition-all" style={{ width: `${progressPct}%` }}></div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
+                      <Stat label="Remaining" value={remaining} sub="minutes" />
+                      <Stat label="Days left incl. today" value={remainingDays} sub="days" />
+                      <Stat label="Needed per day" value={neededPerDay} sub="min / day" />
                     </div>
                   </div>
 
-                  <div className="mt-4 w-full h-3 bg-white rounded-full">
-                    <div className="h-3 pill rounded-full transition-all" style={{ width: `${progressPct()}%` }}></div>
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
-                    <Stat label="Remaining" value={remaining} sub="minutes" />
-                    <Stat label="Days left incl. today" value={remainingDays} sub="days" />
-                    <Stat label="Needed per day" value={neededPerDay} sub="min / day" />
-                  </div>
-                </div>
-
-                {/* Calendar */}
-                <div className="mt-6 bg-white/70 rounded-2xl p-6 border border-white/50">
-                  <h2 className="text-xl font-semibold text-[var(--ml-dark)] mb-2">November {yearNow}</h2>
-                  <div className="weekday-row text-xs text-slate-600 mb-2">
-                    {WEEKDAYS.map(w => <div key={w} className="text-center">{w}</div>)}
-                  </div>
-                  <div className="month-grid">
-                    {novCells.map((d, i) => <DayCell key={i} date={d} />)}
+                  {/* Calendar */}
+                  <div className="mt-6 bg-white/70 rounded-2xl p-6 border border-white/50">
+                    <h2 className="text-xl font-semibold text-[var(--ml-dark)] mb-2">November {yearNow}</h2>
+                    <div className="weekday-row text-xs text-slate-600 mb-2">
+                      {WEEKDAYS.map(w => <div key={w} className="text-center">{w}</div>)}
+                    </div>
+                    <div className="month-grid">
+                      {novCells.map((d, i) => <DayCell key={i} date={d} />)}
+                    </div>
+                    <p className="mt-4 text-center text-xs text-slate-600">Tap a day to log minutes and activity</p>
                   </div>
                 </div>
 
-                {/* Footer / Small note */}
-                <p className="mt-6 text-center text-xs text-slate-600">All data is stored locally in your browser only.</p>
-              </section>
+                {/* Right pane: Activity breakdown */}
+                <aside className="space-y-6">
+                  <div className="bg-white/70 rounded-2xl p-6 border border-white/50">
+                    <h3 className="text-lg font-semibold text-[var(--ml-dark)] mb-4">Activity breakdown</h3>
+                    {ACTIVITY_TYPES.map(t => (
+                      <ActivityBar key={t} label={t} value={totals.byType[t] || 0} max={maxType} />
+                    ))}
+                    <div className="mt-2 text-xs text-slate-600">All minutes count toward the goal</div>
+                  </div>
+                </aside>
+              </div>
+
+              <p className="mt-6 text-center text-xs text-slate-600">Data is stored locally in your browser</p>
             </main>
 
-            {/* Modal */}
+            {/* Modal for logging */}
             {modal && (
               <MinutesModal
                 ymd={modal.ymd}
-                initialValue={modal.value}
+                initialMinutes={modal.minutes}
+                initialActivity={modal.activity}
                 onCancel={() => setModal(null)}
-                onSave={(val) => { setEntries(cur => ({ ...cur, [modal.ymd]: val })); setModal(null); }}
+                onSave={(mins, act) => { setDay(modal.ymd, mins, act); setModal(null); }}
               />
             )}
           </div>
@@ -212,8 +256,9 @@
         );
       }
 
-      function MinutesModal({ ymd, initialValue, onCancel, onSave }){
-        const [val, setVal] = React.useState(Number.isFinite(initialValue) ? initialValue : 0);
+      function MinutesModal({ ymd, initialMinutes, initialActivity, onCancel, onSave }){
+        const [val, setVal] = React.useState(Number.isFinite(initialMinutes) ? initialMinutes : 0);
+        const [act, setAct] = React.useState(ACTIVITY_TYPES.includes(initialActivity) ? initialActivity : "Yoga");
         const d = fromYMD(ymd);
 
         return (
@@ -225,6 +270,22 @@
               </div>
 
               <div className="mt-6">
+                <label className="text-xs text-slate-600">Activity</label>
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {ACTIVITY_TYPES.map(t => (
+                    <button
+                      key={t}
+                      className={`px-3 py-2 rounded-xl border text-sm ${act===t ? "pill" : "bg-white"}`}
+                      onClick={() => setAct(t)}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <label className="text-xs text-slate-600">Minutes</label>
                 <input
                   type="range"
                   min="0"
@@ -253,7 +314,7 @@
 
               <div className="mt-6 flex justify-end gap-2">
                 <button className="px-4 py-2 rounded-xl border" onClick={onCancel}>Cancel</button>
-                <button className="px-4 py-2 rounded-xl pill" onClick={() => onSave(val)}>Save</button>
+                <button className="px-4 py-2 rounded-xl pill" onClick={() => onSave(val, act)}>Save</button>
               </div>
             </div>
           </div>
